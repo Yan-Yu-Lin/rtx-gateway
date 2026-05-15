@@ -1,6 +1,7 @@
 # Go
 /bin/
 /dist/
+/rtx-gateway
 *.test
 *.out
 coverage.out
@@ -37,4 +38,3 @@ logs/
 .vscode/
 *.swp
 *.swo
-
