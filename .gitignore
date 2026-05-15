@@ -1,0 +1,40 @@
+# Go
+/bin/
+/dist/
+*.test
+*.out
+coverage.out
+
+# Node / Nuxt
+node_modules/
+.nuxt/
+.output/
+.nitro/
+.data/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# SQLite
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
