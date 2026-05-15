@@ -18,6 +18,7 @@ import (
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/auth"
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/config"
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/db"
+	"github.com/Yan-Yu-Lin/rtx-gateway/internal/health"
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/proxy"
 )
 
@@ -35,7 +36,9 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	database, err := db.Open(ctx, cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -60,6 +63,9 @@ func run(logger *slog.Logger) error {
 		logger.Warn("using default key pepper; set RTX_GATEWAY_KEY_PEPPER before production")
 	}
 
+	healthChecker := health.NewChecker(database, cfg.DefaultEndpoints, logger)
+	healthChecker.Start(ctx, 30*time.Second)
+
 	publicServer := &http.Server{
 		Addr:              cfg.PublicAddr,
 		Handler:           proxy.NewRouter(database, cfg, logger),
@@ -67,7 +73,7 @@ func run(logger *slog.Logger) error {
 	}
 	adminServer := &http.Server{
 		Addr:              cfg.AdminAddr,
-		Handler:           admin.NewRouter(database, cfg),
+		Handler:           admin.NewRouter(database, cfg, healthChecker, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -82,9 +88,11 @@ func run(logger *slog.Logger) error {
 	case signal := <-stop:
 		logger.Info("received shutdown signal", "signal", signal.String())
 	case err := <-errs:
+		cancel()
 		return err
 	}
 
+	cancel()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := publicServer.Shutdown(shutdownCtx); err != nil {
