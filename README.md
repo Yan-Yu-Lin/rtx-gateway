@@ -46,7 +46,7 @@ Verified target host: `jason`
 - Ubuntu 24.04
 - Go 1.22.2
 - SQLite 3.45.1
-- nginx + sslh on port 443
+- nginx on `127.0.0.1:8443` behind sslh on public `443`
 - systemd for the Go service
 - PM2 for the Nuxt dashboard
 - service user: `rtx-gateway`
@@ -61,7 +61,13 @@ go test ./...
 go run ./cmd/rtx-gateway
 ```
 
-Dashboard work will live under `dashboard/` once the Nuxt app is created.
+Dashboard:
+
+```bash
+cd dashboard
+npm ci
+npm run dev
+```
 
 ## Build
 
@@ -94,6 +100,17 @@ RTX_GATEWAY_OCR_UPSTREAM=http://127.0.0.1:9183
 RTX_GATEWAY_MAX_BODY_BYTES=67108864
 ```
 
+Dashboard variables live in `/etc/rtx-gateway/dashboard.env`:
+
+```env
+NITRO_HOST=127.0.0.1
+NITRO_PORT=3008
+NUXT_ADMIN_API_URL=http://127.0.0.1:9189
+NUXT_ADMIN_TOKEN=replace-with-same-value-as-RTX_GATEWAY_ADMIN_TOKEN
+NUXT_SESSION_SECRET=replace-with-long-random-session-secret
+NUXT_LOGIN_PASSWORD=replace-with-dashboard-login-passphrase
+```
+
 ## API Key Format
 
 API keys use this format:
@@ -106,16 +123,69 @@ Only the prefix and a hash of the full key are stored. The raw key is shown once
 
 ## Deployment Sketch
 
-1. Build the Go binary.
-2. Copy it to `/opt/rtx-gateway/rtx-gateway`.
-3. Create `/etc/rtx-gateway/rtx-gateway.env`.
-4. Install the systemd unit from `deploy/systemd/`.
-5. Update nginx vhosts so `rtx-llm` and `rtx-ocr` proxy to `127.0.0.1:9188`.
-6. Start the service:
+Phase 5 deployment assets live under `deploy/`.
+
+Important routing:
+
+- `rtx-llm.arthurlin.dev` proxies to `127.0.0.1:9188`.
+- `rtx-ocr.arthurlin.dev` proxies to `127.0.0.1:9188`.
+- `gateway.arthurlin.dev` proxies to the Nuxt dashboard on `127.0.0.1:3008`.
+- Nuxt server routes call the Go admin API on `127.0.0.1:9189` with `NUXT_ADMIN_TOKEN`.
+- Browser traffic should not be proxied directly to `9189`; otherwise it bypasses Nuxt session auth.
+
+Dry review the deploy files first:
+
+```bash
+ls -l deploy/scripts/
+sed -n '1,220p' deploy/scripts/install.sh
+```
+
+Manual deployment command:
+
+```bash
+REMOTE_HOST=jason-ts ./deploy/scripts/install.sh
+```
+
+The script:
+
+1. Cross-compiles the Go binary for linux/amd64.
+2. Builds the Nuxt dashboard.
+3. Copies artifacts to jason.
+4. Installs `/opt/rtx-gateway/rtx-gateway`.
+5. Creates `/etc/rtx-gateway/rtx-gateway.env` and `/etc/rtx-gateway/dashboard.env` from templates only if missing.
+6. Installs the systemd unit and nginx vhosts.
+7. Restarts `rtx-gateway`, reloads nginx, and starts/restarts the PM2 dashboard app.
+
+Before first production restart, edit secrets:
+
+```bash
+ssh jason-ts 'sudoedit /etc/rtx-gateway/rtx-gateway.env'
+ssh jason-ts 'sudoedit /etc/rtx-gateway/dashboard.env'
+```
+
+The Go service can also be managed directly:
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now rtx-gateway
+```
+
+Manual migration helper:
+
+```bash
+REMOTE_HOST=jason-ts ./deploy/scripts/migrate.sh
+```
+
+`rtx-gateway` applies migrations at startup; the helper restarts the service and checks SQLite integrity.
+
+Post-deploy checks:
+
+```bash
+ssh jason-ts 'sudo systemctl status rtx-gateway --no-pager'
+ssh jason-ts 'pm2 status rtx-gateway-dashboard'
+ssh jason-ts 'sudo nginx -t'
+curl https://rtx-llm.arthurlin.dev/health
+curl https://rtx-llm.arthurlin.dev/v1/models
 ```
 
 See [PLAN.md](./PLAN.md) for the implementation plan.
