@@ -120,12 +120,13 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 	recorder := &statusRecorder{ResponseWriter: response, status: http.StatusOK}
 	var upstreamStatus *int
 	var proxyError string
+	var usageCapture usage.Capture
 	reverseProxy := httputil.NewSingleHostReverseProxy(endpoint.UpstreamURL)
 	reverseProxy.Director = director(endpoint.UpstreamURL, requestID)
 	reverseProxy.ModifyResponse = func(upstreamResponse *http.Response) error {
 		status := upstreamResponse.StatusCode
 		upstreamStatus = &status
-		return nil
+		return captureUsageFromResponse(upstreamResponse, &usageCapture)
 	}
 	reverseProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		status, message := proxyErrorResponse(err)
@@ -143,6 +144,12 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 		Host:               host,
 		Method:             request.Method,
 		Path:               request.URL.RequestURI(),
+		Model:              usageCapture.Model,
+		Streaming:          usageCapture.Streaming,
+		UsageMissing:       usageCapture.UsageMissing,
+		PromptTokens:       usageCapture.PromptTokens,
+		CompletionTokens:   usageCapture.CompletionTokens,
+		TotalTokens:        usageCapture.TotalTokens,
 		StatusCode:         recorder.status,
 		UpstreamStatusCode: upstreamStatus,
 		LatencyMS:          time.Since(started).Milliseconds(),
@@ -158,6 +165,9 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 		"host", host,
 		"status", recorder.status,
 		"upstream_status", upstreamStatus,
+		"model", usageCapture.Model,
+		"streaming", usageCapture.Streaming,
+		"usage_missing", usageCapture.UsageMissing,
 		"latency_ms", entry.LatencyMS,
 		"error", proxyError,
 	)
