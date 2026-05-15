@@ -39,6 +39,8 @@ func (router *Router) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		router.usageRequests(response, request)
 	case request.Method == http.MethodGet && request.URL.Path == "/admin/v1/health":
 		router.health(response, request)
+	case request.Method == http.MethodGet && request.URL.Path == "/admin/v1/health/checks":
+		router.healthChecks(response, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/admin/v1/health/check":
 		router.checkHealth(response, request)
 	default:

@@ -231,6 +231,18 @@ func TestHealthCheck(t *testing.T) {
 	if payload.Endpoints[0].LastHealthStatus == nil || *payload.Endpoints[0].LastHealthStatus != "healthy" {
 		t.Fatalf("unexpected endpoint health: %+v", payload.Endpoints[0])
 	}
+
+	checksResponse := doAdminRequest(t, router, http.MethodGet, "/admin/v1/health/checks?limit=10", "")
+	if checksResponse.Code != http.StatusOK {
+		t.Fatalf("health checks status = %d, body = %s", checksResponse.Code, checksResponse.Body.String())
+	}
+	var checksPayload struct {
+		Checks []endpointHealthCheckResponse `json:"checks"`
+	}
+	decodeJSON(t, checksResponse.Body.Bytes(), &checksPayload)
+	if len(checksPayload.Checks) != 1 || checksPayload.Checks[0].Status != "healthy" {
+		t.Fatalf("unexpected health checks: %+v", checksPayload.Checks)
+	}
 }
 
 func newTestRouter(t *testing.T, endpoints []config.Endpoint) (*Router, func()) {

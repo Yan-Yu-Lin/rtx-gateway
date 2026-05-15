@@ -17,6 +17,16 @@ type endpointHealthResponse struct {
 	LastHealthCheckedAt  *string `json:"last_health_checked_at,omitempty"`
 }
 
+type endpointHealthCheckResponse struct {
+	ID         int64   `json:"id"`
+	EndpointID string  `json:"endpoint_id"`
+	Status     string  `json:"status"`
+	StatusCode *int    `json:"status_code,omitempty"`
+	LatencyMS  int64   `json:"latency_ms"`
+	Error      *string `json:"error,omitempty"`
+	CheckedAt  string  `json:"checked_at"`
+}
+
 func (router *Router) health(response http.ResponseWriter, request *http.Request) {
 	rows, err := router.database.QueryContext(
 		request.Context(),
@@ -46,6 +56,47 @@ func (router *Router) health(response http.ResponseWriter, request *http.Request
 	}
 
 	writeJSON(response, http.StatusOK, map[string]any{"endpoints": endpoints})
+}
+
+func (router *Router) healthChecks(response http.ResponseWriter, request *http.Request) {
+	limit, ok := parseLimit(response, request.URL.Query().Get("limit"))
+	if !ok {
+		return
+	}
+
+	query := `select id, endpoint_id, status, status_code, latency_ms, error, checked_at
+	          from endpoint_health_checks
+	          where 1 = 1`
+	args := []any{}
+	if endpoint := request.URL.Query().Get("endpoint"); endpoint != "" {
+		query += " and endpoint_id = ?"
+		args = append(args, endpoint)
+	}
+	query += " order by checked_at desc limit ?"
+	args = append(args, limit)
+
+	rows, err := router.database.QueryContext(request.Context(), query, args...)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "failed to query health checks", "database_error")
+		return
+	}
+	defer rows.Close()
+
+	checks := []endpointHealthCheckResponse{}
+	for rows.Next() {
+		check, err := scanEndpointHealthCheck(rows)
+		if err != nil {
+			writeError(response, http.StatusInternalServerError, "failed to read health check", "database_error")
+			return
+		}
+		checks = append(checks, check)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(response, http.StatusInternalServerError, "failed to query health checks", "database_error")
+		return
+	}
+
+	writeJSON(response, http.StatusOK, map[string]any{"checks": checks})
 }
 
 func (router *Router) checkHealth(response http.ResponseWriter, request *http.Request) {
@@ -97,4 +148,28 @@ func scanEndpointHealth(scanner interface{ Scan(dest ...any) error }) (endpointH
 	endpoint.LastHealthError = nullStringPtr(errorText)
 	endpoint.LastHealthCheckedAt = nullStringPtr(checkedAt)
 	return endpoint, nil
+}
+
+func scanEndpointHealthCheck(scanner interface{ Scan(dest ...any) error }) (endpointHealthCheckResponse, error) {
+	var check endpointHealthCheckResponse
+	var statusCode sql.NullInt64
+	var errorText sql.NullString
+	err := scanner.Scan(
+		&check.ID,
+		&check.EndpointID,
+		&check.Status,
+		&statusCode,
+		&check.LatencyMS,
+		&errorText,
+		&check.CheckedAt,
+	)
+	if err != nil {
+		return endpointHealthCheckResponse{}, err
+	}
+	if statusCode.Valid {
+		value := int(statusCode.Int64)
+		check.StatusCode = &value
+	}
+	check.Error = nullStringPtr(errorText)
+	return check, nil
 }
