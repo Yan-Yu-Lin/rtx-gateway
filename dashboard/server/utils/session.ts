@@ -8,7 +8,7 @@ import {
 } from 'h3'
 
 const sessionCookieName = 'rtx_gateway_session'
-const sessionMaxAgeSeconds = 12 * 60 * 60
+const sessionMaxAgeSeconds = 30 * 24 * 60 * 60
 
 interface SessionPayload {
   sub: 'arthur'
