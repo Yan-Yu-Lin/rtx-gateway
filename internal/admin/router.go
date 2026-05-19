@@ -8,17 +8,19 @@ import (
 
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/config"
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/health"
+	"github.com/Yan-Yu-Lin/rtx-gateway/internal/security"
 )
 
 type Router struct {
 	database *sql.DB
 	cfg      config.Config
 	checker  *health.Checker
+	security *security.Manager
 	logger   *slog.Logger
 }
 
-func NewRouter(database *sql.DB, cfg config.Config, checker *health.Checker, logger *slog.Logger) *Router {
-	return &Router{database: database, cfg: cfg, checker: checker, logger: logger}
+func NewRouter(database *sql.DB, cfg config.Config, checker *health.Checker, securityManager *security.Manager, logger *slog.Logger) *Router {
+	return &Router{database: database, cfg: cfg, checker: checker, security: securityManager, logger: logger}
 }
 
 func (router *Router) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -43,6 +45,14 @@ func (router *Router) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		router.healthChecks(response, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/admin/v1/health/check":
 		router.checkHealth(response, request)
+	case request.Method == http.MethodGet && request.URL.Path == "/admin/v1/security/bans":
+		router.securityBans(response, request)
+	case request.Method == http.MethodPost && request.URL.Path == "/admin/v1/security/bans":
+		router.createSecurityBan(response, request)
+	case request.Method == http.MethodPost && isLiftBanPath(request.URL.Path):
+		router.liftSecurityBan(response, request)
+	case request.Method == http.MethodGet && request.URL.Path == "/admin/v1/security/events":
+		router.securityEvents(response, request)
 	default:
 		writeError(response, http.StatusNotFound, "admin endpoint not found", "not_found")
 	}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/config"
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/db"
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/health"
+	"github.com/Yan-Yu-Lin/rtx-gateway/internal/security"
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/usage"
 )
 
@@ -245,6 +247,66 @@ func TestHealthCheck(t *testing.T) {
 	}
 }
 
+func TestSecurityAdminEndpoints(t *testing.T) {
+	t.Parallel()
+
+	router, cleanup := newTestRouter(t, nil)
+	defer cleanup()
+
+	createResponse := doAdminRequest(t, router, http.MethodPost, "/admin/v1/security/bans", `{"client_ip":"203.0.113.55","reason":"test ban","duration_seconds":300}`)
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("create ban status = %d, body = %s", createResponse.Code, createResponse.Body.String())
+	}
+
+	var created struct {
+		ID       int64  `json:"id"`
+		ClientIP string `json:"client_ip"`
+	}
+	decodeJSON(t, createResponse.Body.Bytes(), &created)
+	if created.ID == 0 || created.ClientIP != "203.0.113.55" {
+		t.Fatalf("unexpected created ban: %+v", created)
+	}
+
+	listResponse := doAdminRequest(t, router, http.MethodGet, "/admin/v1/security/bans", "")
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("list bans status = %d, body = %s", listResponse.Code, listResponse.Body.String())
+	}
+	var listed struct {
+		Bans []struct {
+			ID int64 `json:"id"`
+		} `json:"bans"`
+	}
+	decodeJSON(t, listResponse.Body.Bytes(), &listed)
+	if len(listed.Bans) != 1 {
+		t.Fatalf("listed bans = %d, want 1", len(listed.Bans))
+	}
+
+	eventsResponse := doAdminRequest(t, router, http.MethodGet, "/admin/v1/security/events?limit=10", "")
+	if eventsResponse.Code != http.StatusOK {
+		t.Fatalf("events status = %d, body = %s", eventsResponse.Code, eventsResponse.Body.String())
+	}
+	var events struct {
+		Events []struct {
+			EventType string `json:"event_type"`
+		} `json:"events"`
+	}
+	decodeJSON(t, eventsResponse.Body.Bytes(), &events)
+	if len(events.Events) == 0 || events.Events[0].EventType != security.EventManualBan {
+		t.Fatalf("unexpected events: %+v", events.Events)
+	}
+
+	liftResponse := doAdminRequest(t, router, http.MethodPost, "/admin/v1/security/bans/"+strconv.FormatInt(created.ID, 10)+"/lift", "")
+	if liftResponse.Code != http.StatusOK {
+		t.Fatalf("lift status = %d, body = %s", liftResponse.Code, liftResponse.Body.String())
+	}
+
+	listResponse = doAdminRequest(t, router, http.MethodGet, "/admin/v1/security/bans", "")
+	decodeJSON(t, listResponse.Body.Bytes(), &listed)
+	if len(listed.Bans) != 0 {
+		t.Fatalf("listed bans after lift = %d, want 0", len(listed.Bans))
+	}
+}
+
 func newTestRouter(t *testing.T, endpoints []config.Endpoint) (*Router, func()) {
 	t.Helper()
 
@@ -266,7 +328,11 @@ func newTestRouter(t *testing.T, endpoints []config.Endpoint) (*Router, func()) 
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	checker := health.NewChecker(database, endpoints, logger)
-	return NewRouter(database, cfg, checker, logger), func() {
+	securityManager, err := security.NewManager(context.Background(), database, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewRouter(database, cfg, checker, securityManager, logger), func() {
 		_ = database.Close()
 	}
 }

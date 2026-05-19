@@ -58,6 +58,37 @@ export interface UsageRequestsResponse {
   requests: UsageRequest[]
 }
 
+export interface SecurityBan {
+  id: number
+  client_ip: string
+  reason: string
+  strikes: number
+  banned_until: string
+  manual: boolean
+  created_at: string
+  updated_at: string
+  lifted_at?: string
+}
+
+export interface SecurityBansResponse {
+  bans: SecurityBan[]
+}
+
+export interface SecurityEvent {
+  id: number
+  client_ip: string
+  event_type: string
+  host?: string
+  path?: string
+  status_code?: number
+  detail?: string
+  created_at: string
+}
+
+export interface SecurityEventsResponse {
+  events: SecurityEvent[]
+}
+
 export interface EndpointHealth {
   id: string
   host: string

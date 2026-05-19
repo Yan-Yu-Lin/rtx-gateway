@@ -11,6 +11,7 @@ EnvironmentFile=/etc/rtx-gateway/rtx-gateway.env
 ExecStart=/opt/rtx-gateway/rtx-gateway
 Restart=on-failure
 RestartSec=3
+UMask=0027
 
 NoNewPrivileges=true
 PrivateTmp=true

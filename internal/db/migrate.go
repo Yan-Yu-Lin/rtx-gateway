@@ -88,6 +88,39 @@ create index if not exists idx_usage_logs_created_at on usage_logs(created_at);
 create index if not exists idx_usage_logs_api_key_time on usage_logs(api_key_id, created_at);
 create index if not exists idx_usage_logs_endpoint_time on usage_logs(endpoint_id, created_at);
 create index if not exists idx_usage_logs_model_time on usage_logs(model, created_at);
+	`
+
+const securityMigration = `
+create table if not exists ip_bans (
+  id integer primary key autoincrement,
+  client_ip text not null,
+  reason text not null,
+  strikes integer not null default 1,
+  banned_until text not null,
+  manual integer not null default 0,
+  created_at text not null,
+  updated_at text not null,
+  lifted_at text
+);
+
+create index if not exists idx_ip_bans_active
+  on ip_bans(client_ip, banned_until, lifted_at);
+
+create table if not exists security_events (
+  id integer primary key autoincrement,
+  client_ip text not null,
+  event_type text not null,
+  host text,
+  path text,
+  status_code integer,
+  detail text,
+  created_at text not null
+);
+
+create index if not exists idx_security_events_ip_time
+  on security_events(client_ip, created_at);
+create index if not exists idx_security_events_type_time
+  on security_events(event_type, created_at);
 `
 
 func Migrate(ctx context.Context, database *sql.DB, endpoints []config.Endpoint) error {
@@ -102,6 +135,19 @@ func Migrate(ctx context.Context, database *sql.DB, endpoints []config.Endpoint)
 		time.Now().UTC().Format(time.RFC3339Nano),
 	); err != nil {
 		return fmt.Errorf("record migration: %w", err)
+	}
+
+	if _, err := database.ExecContext(ctx, securityMigration); err != nil {
+		return fmt.Errorf("apply security migration: %w", err)
+	}
+
+	if _, err := database.ExecContext(
+		ctx,
+		"insert or ignore into schema_migrations (version, applied_at) values (?, ?)",
+		"002_security",
+		time.Now().UTC().Format(time.RFC3339Nano),
+	); err != nil {
+		return fmt.Errorf("record security migration: %w", err)
 	}
 
 	for _, endpoint := range endpoints {

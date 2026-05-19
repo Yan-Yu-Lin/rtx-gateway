@@ -51,6 +51,9 @@ scp "$ROOT_DIR/deploy/dashboard.env.example" "$REMOTE_HOST:/tmp/rtx-gateway-dash
 for site in rtx-llm.arthurlin.dev rtx-ocr.arthurlin.dev gateway.arthurlin.dev; do
   scp "$ROOT_DIR/deploy/nginx/$site" "$REMOTE_HOST:/tmp/$site"
 done
+for conf in rtx-gateway-security.conf; do
+  scp "$ROOT_DIR/deploy/nginx/conf.d/$conf" "$REMOTE_HOST:/tmp/$conf"
+done
 
 echo "==> Installing files on $REMOTE_HOST"
 ssh "$REMOTE_HOST" \
@@ -87,6 +90,9 @@ sudo chown -R "$REMOTE_APP_USER:$REMOTE_APP_USER" /opt/rtx-gateway/dashboard
 for site in rtx-llm.arthurlin.dev rtx-ocr.arthurlin.dev gateway.arthurlin.dev; do
   sudo install -o root -g root -m 0644 "/tmp/$site" "/etc/nginx/sites-available/$site"
   sudo ln -sfn "/etc/nginx/sites-available/$site" "/etc/nginx/sites-enabled/$site"
+done
+for conf in rtx-gateway-security.conf; do
+  sudo install -o root -g root -m 0644 "/tmp/$conf" "/etc/nginx/conf.d/$conf"
 done
 
 sudo systemctl daemon-reload

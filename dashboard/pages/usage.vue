@@ -58,6 +58,7 @@
             <tr>
               <th class="table-heading">Time</th>
               <th class="table-heading">Key</th>
+              <th class="table-heading">IP</th>
               <th class="table-heading">Endpoint</th>
               <th class="table-heading">Path</th>
               <th class="table-heading">Model</th>
@@ -71,6 +72,7 @@
             <tr v-for="request in recentRequests" :key="request.request_id">
               <td class="table-cell whitespace-nowrap text-zinc-400">{{ formatDateTime(request.created_at) }}</td>
               <td class="table-cell font-mono text-xs">{{ request.api_key_prefix || 'none' }}</td>
+              <td class="table-cell font-mono text-xs">{{ request.client_ip || 'n/a' }}</td>
               <td class="table-cell font-mono text-xs">{{ request.endpoint_id }}</td>
               <td class="table-cell max-w-xs truncate font-mono text-xs">{{ request.path }}</td>
               <td class="table-cell">{{ request.model || 'n/a' }}</td>
@@ -80,7 +82,7 @@
               <td class="table-cell"><StatusBadge :status="request.status_code" /></td>
             </tr>
             <tr v-if="recentRequests.length === 0">
-              <td class="table-cell text-zinc-500" colspan="9">No requests logged yet.</td>
+              <td class="table-cell text-zinc-500" colspan="10">No requests logged yet.</td>
             </tr>
           </tbody>
         </table>

@@ -8,20 +8,21 @@ import (
 	"strings"
 
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/config"
+	"github.com/Yan-Yu-Lin/rtx-gateway/internal/security"
 )
 
 type Router struct {
 	handler *Handler
 }
 
-func NewRouter(database *sql.DB, cfg config.Config, logger *slog.Logger) *Router {
+func NewRouter(database *sql.DB, cfg config.Config, logger *slog.Logger, securityManager *security.Manager) *Router {
 	endpoints := make(map[string]config.Endpoint, len(cfg.DefaultEndpoints))
 	for _, endpoint := range cfg.DefaultEndpoints {
 		endpoints[strings.ToLower(endpoint.Host)] = endpoint
 	}
 
 	return &Router{
-		handler: NewHandler(database, cfg, logger, endpoints),
+		handler: NewHandler(database, cfg, logger, endpoints, securityManager),
 	}
 }
 

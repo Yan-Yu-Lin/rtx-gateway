@@ -17,6 +17,7 @@ import (
 
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/auth"
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/config"
+	"github.com/Yan-Yu-Lin/rtx-gateway/internal/security"
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/usage"
 )
 
@@ -27,6 +28,7 @@ type Handler struct {
 	cfg       config.Config
 	logger    *slog.Logger
 	endpoints map[string]config.Endpoint
+	security  *security.Manager
 }
 
 type statusRecorder struct {
@@ -34,12 +36,13 @@ type statusRecorder struct {
 	status int
 }
 
-func NewHandler(database *sql.DB, cfg config.Config, logger *slog.Logger, endpoints map[string]config.Endpoint) *Handler {
+func NewHandler(database *sql.DB, cfg config.Config, logger *slog.Logger, endpoints map[string]config.Endpoint, securityManager *security.Manager) *Handler {
 	return &Handler{
 		database:  database,
 		cfg:       cfg,
 		logger:    logger,
 		endpoints: endpoints,
+		security:  securityManager,
 	}
 }
 
@@ -47,10 +50,17 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 	started := time.Now()
 	requestID := requestID()
 	host := normalizedHost(request.Host)
+	clientIP := clientIP(request)
 	endpoint, ok := h.endpoints[host]
 	if !ok {
 		writeOpenAIError(response, http.StatusBadGateway, "unknown gateway host", "upstream_error")
 		h.logger.Warn("rejected request for unknown host", "request_id", requestID, "host", host, "path", request.URL.RequestURI())
+		return
+	}
+
+	if ban, banned := h.activeBan(clientIP, started); banned {
+		writeOpenAIError(response, http.StatusForbidden, "client IP is temporarily banned", "security_error")
+		h.logger.Warn("blocked banned client IP", "request_id", requestID, "client_ip", clientIP, "ban_id", ban.ID, "banned_until", ban.BannedUntil)
 		return
 	}
 
@@ -64,7 +74,7 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 			Path:       request.URL.RequestURI(),
 			StatusCode: http.StatusRequestEntityTooLarge,
 			LatencyMS:  time.Since(started).Milliseconds(),
-			ClientIP:   clientIP(request),
+			ClientIP:   clientIP,
 			UserAgent:  request.UserAgent(),
 			Error:      "request body too large",
 			CreatedAt:  started,
@@ -74,27 +84,59 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 
 	principal, err := auth.AuthenticateRequest(request.Context(), h.database, h.cfg.KeyPepper, request)
 	if err != nil {
+		if ok, retryAfter := h.allowUnauthed(clientIP, started); !ok {
+			status := http.StatusTooManyRequests
+			h.recordSecurityEvent(request.Context(), security.EventInput{
+				ClientIP:   clientIP,
+				EventType:  security.EventRateLimited,
+				Host:       host,
+				Path:       request.URL.RequestURI(),
+				StatusCode: &status,
+				Detail:     fmt.Sprintf("unauthenticated rate limit exceeded; retry after %s", retryAfter.Round(time.Second)),
+			}, started)
+			response.Header().Set("Retry-After", retryAfterHeader(retryAfter))
+			writeOpenAIError(response, status, "rate limit exceeded", "rate_limit_error")
+			return
+		}
+
 		status, message := authErrorStatus(err)
+		h.recordAuthFailure(request.Context(), security.EventInput{
+			ClientIP:   clientIP,
+			Host:       host,
+			Path:       request.URL.RequestURI(),
+			StatusCode: &status,
+			Detail:     message,
+		}, started)
 		writeOpenAIError(response, status, message, "auth_error")
-		h.logUsage(request.Context(), usage.Entry{
-			RequestID:    requestID,
-			APIKeyPrefix: keyPrefixFromHeader(request.Header.Get("Authorization")),
-			EndpointID:   endpoint.ID,
-			Host:         host,
-			Method:       request.Method,
-			Path:         request.URL.RequestURI(),
-			StatusCode:   status,
-			LatencyMS:    time.Since(started).Milliseconds(),
-			ClientIP:     clientIP(request),
-			UserAgent:    request.UserAgent(),
-			Error:        message,
-			CreatedAt:    started,
-		})
+		return
+	}
+
+	if ok, retryAfter := h.allowAuthed(clientIP, principal.ID, started); !ok {
+		status := http.StatusTooManyRequests
+		h.recordSecurityEvent(request.Context(), security.EventInput{
+			ClientIP:   clientIP,
+			EventType:  security.EventRateLimited,
+			Host:       host,
+			Path:       request.URL.RequestURI(),
+			StatusCode: &status,
+			Detail:     fmt.Sprintf("authenticated rate limit exceeded for key %s; retry after %s", principal.Prefix, retryAfter.Round(time.Second)),
+		}, started)
+		response.Header().Set("Retry-After", retryAfterHeader(retryAfter))
+		writeOpenAIError(response, status, "rate limit exceeded", "rate_limit_error")
 		return
 	}
 
 	if !principal.HasScope(endpoint.ID) {
 		writeOpenAIError(response, http.StatusForbidden, "API key is not allowed to access this endpoint", "permission_error")
+		status := http.StatusForbidden
+		h.recordSecurityEvent(request.Context(), security.EventInput{
+			ClientIP:   clientIP,
+			EventType:  security.EventScopeDenied,
+			Host:       host,
+			Path:       request.URL.RequestURI(),
+			StatusCode: &status,
+			Detail:     "forbidden endpoint scope",
+		}, started)
 		h.logUsage(request.Context(), usage.Entry{
 			RequestID:    requestID,
 			APIKeyID:     &principal.ID,
@@ -105,7 +147,7 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 			Path:         request.URL.RequestURI(),
 			StatusCode:   http.StatusForbidden,
 			LatencyMS:    time.Since(started).Milliseconds(),
-			ClientIP:     clientIP(request),
+			ClientIP:     clientIP,
 			UserAgent:    request.UserAgent(),
 			Error:        "forbidden endpoint scope",
 			CreatedAt:    started,
@@ -153,7 +195,7 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 		StatusCode:         recorder.status,
 		UpstreamStatusCode: upstreamStatus,
 		LatencyMS:          time.Since(started).Milliseconds(),
-		ClientIP:           clientIP(request),
+		ClientIP:           clientIP,
 		UserAgent:          request.UserAgent(),
 		Error:              proxyError,
 		CreatedAt:          started,
@@ -179,6 +221,47 @@ func (h *Handler) logUsage(ctx context.Context, entry usage.Entry) {
 	}
 }
 
+func (h *Handler) activeBan(clientIP string, now time.Time) (security.Ban, bool) {
+	if h.security == nil {
+		return security.Ban{}, false
+	}
+	return h.security.ActiveBan(clientIP, now)
+}
+
+func (h *Handler) allowUnauthed(clientIP string, now time.Time) (bool, time.Duration) {
+	if h.security == nil {
+		return true, 0
+	}
+	return h.security.AllowUnauthed(clientIP, now)
+}
+
+func (h *Handler) allowAuthed(clientIP string, keyID string, now time.Time) (bool, time.Duration) {
+	if h.security == nil {
+		return true, 0
+	}
+	return h.security.AllowAuthed(clientIP, keyID, now)
+}
+
+func (h *Handler) recordAuthFailure(ctx context.Context, input security.EventInput, now time.Time) {
+	if h.security == nil {
+		return
+	}
+	if ban, err := h.security.RecordAuthFailure(ctx, input, now); err != nil {
+		h.logger.Warn("failed to record auth failure", "client_ip", input.ClientIP, "error", err)
+	} else if ban != nil {
+		h.logger.Warn("auto-banned client IP", "client_ip", input.ClientIP, "ban_id", ban.ID, "banned_until", ban.BannedUntil)
+	}
+}
+
+func (h *Handler) recordSecurityEvent(ctx context.Context, input security.EventInput, now time.Time) {
+	if h.security == nil {
+		return
+	}
+	if err := h.security.RecordEvent(ctx, input, now); err != nil {
+		h.logger.Warn("failed to record security event", "client_ip", input.ClientIP, "event_type", input.EventType, "error", err)
+	}
+}
+
 func director(target *url.URL, requestID string) func(*http.Request) {
 	return func(request *http.Request) {
 		originalHost := request.Host
@@ -188,6 +271,7 @@ func director(target *url.URL, requestID string) func(*http.Request) {
 		request.Host = target.Host
 		request.Header.Set("X-Request-ID", requestID)
 		request.Header.Set("X-Forwarded-Host", originalHost)
+		request.Header.Del("Authorization")
 	}
 }
 
@@ -227,18 +311,26 @@ func normalizedHost(host string) string {
 }
 
 func clientIP(request *http.Request) string {
+	if realIP := strings.TrimSpace(request.Header.Get("X-Real-IP")); realIP != "" {
+		return realIP
+	}
 	if forwardedFor := strings.TrimSpace(request.Header.Get("X-Forwarded-For")); forwardedFor != "" {
 		parts := strings.Split(forwardedFor, ",")
 		return strings.TrimSpace(parts[0])
-	}
-	if realIP := strings.TrimSpace(request.Header.Get("X-Real-IP")); realIP != "" {
-		return realIP
 	}
 	host, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err != nil {
 		return request.RemoteAddr
 	}
 	return host
+}
+
+func retryAfterHeader(duration time.Duration) string {
+	seconds := int(duration.Round(time.Second).Seconds())
+	if seconds < 1 {
+		seconds = 1
+	}
+	return fmt.Sprintf("%d", seconds)
 }
 
 func authErrorStatus(err error) (int, string) {

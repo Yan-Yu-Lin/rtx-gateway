@@ -55,6 +55,7 @@ const nav = [
   { to: '/', label: 'Overview' },
   { to: '/keys', label: 'Keys' },
   { to: '/usage', label: 'Usage' },
+  { to: '/security', label: 'Security' },
   { to: '/health', label: 'Health' },
 ]
 

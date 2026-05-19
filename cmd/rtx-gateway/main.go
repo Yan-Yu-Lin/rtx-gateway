@@ -20,6 +20,7 @@ import (
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/db"
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/health"
 	"github.com/Yan-Yu-Lin/rtx-gateway/internal/proxy"
+	"github.com/Yan-Yu-Lin/rtx-gateway/internal/security"
 )
 
 func main() {
@@ -66,14 +67,19 @@ func run(logger *slog.Logger) error {
 	healthChecker := health.NewChecker(database, cfg.DefaultEndpoints, logger)
 	healthChecker.Start(ctx, 30*time.Second)
 
+	securityManager, err := security.NewManager(ctx, database, logger)
+	if err != nil {
+		return fmt.Errorf("initialize security manager: %w", err)
+	}
+
 	publicServer := &http.Server{
 		Addr:              cfg.PublicAddr,
-		Handler:           proxy.NewRouter(database, cfg, logger),
+		Handler:           proxy.NewRouter(database, cfg, logger, securityManager),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	adminServer := &http.Server{
 		Addr:              cfg.AdminAddr,
-		Handler:           admin.NewRouter(database, cfg, healthChecker, logger),
+		Handler:           admin.NewRouter(database, cfg, healthChecker, securityManager, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
